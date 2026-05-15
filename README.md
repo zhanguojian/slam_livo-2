@@ -1,2 +1,2 @@
-# slam_livo-2
-livo-ros2
+# FAST-LIVO2_ROS2
+Fast-livo2 humble version.
