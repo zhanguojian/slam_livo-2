@@ -24,7 +24,7 @@
       exposure_time_init: 0.0
 
     preprocess:
-      point_filter_num: 3 
+      point_filter_num: 2
       filter_size_surf: 0.1
       lidar_type: 1 # Livox Avia LiDAR
       scan_line: 4

@@ -139,7 +139,7 @@ void Preprocess::livox_handler(const sensor_msgs::msg::PointCloud2::ConstSharedP
       const uint8_t line = *iter_line;
       const uint8_t tag = *iter_tag;
 
-      if ((line < N_SCANS) && ((tag & 0x30) == 0x10))
+      if ((line < N_SCANS) && ((tag & 0x30) == 0x00))
       {
         PointType p;
 
