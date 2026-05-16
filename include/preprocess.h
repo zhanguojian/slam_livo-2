@@ -10,13 +10,13 @@ This file is subject to the terms and conditions outlined in the 'LICENSE' file,
 which is included as part of this source code package.
 */
 
-#ifndef PREPROCESS_H_
-#define PREPROCESS_H_
+#pragma once
 
+#include <cstdint>
+#include <cmath>
 #include "common_lib.h"
-#include <livox_ros_driver2/msg/custom_msg.hpp>
 #include <pcl_conversions/pcl_conversions.h>
-
+#include <sensor_msgs/point_cloud2_iterator.hpp>
 using namespace std;
 
 #define IS_VALID(a) ((abs(a) > 1e8) ? true : false)
@@ -62,6 +62,26 @@ struct orgtype
     intersect = 2;
   }
 };
+
+/*** Livox ***/
+namespace livox_ros
+{
+struct EIGEN_ALIGN16 Point
+{
+  PCL_ADD_POINT4D;
+  float intensity;
+  uint8_t tag;
+  uint8_t line;
+  double timestamp;
+  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+};
+} // namespace livox_ros
+POINT_CLOUD_REGISTER_POINT_STRUCT(livox_ros::Point,
+                                  (float, x, x)(float, y, y)(float, z, z)(float, intensity, intensity)(uint8_t, tag, tag)(uint8_t, line, line)(double, timestamp, timestamp))
+/****************/
+
+
+
 
 /*** Velodyne ***/
 namespace velodyne_ros
@@ -155,7 +175,6 @@ public:
   Preprocess();
   ~Preprocess();
 
-  void process(const livox_ros_driver2::msg::CustomMsg::SharedPtr &msg, PointCloudXYZI::Ptr &pcl_out);
   void process(const sensor_msgs::msg::PointCloud2::ConstSharedPtr &msg, PointCloudXYZI::Ptr &pcl_out);
   void set(bool feat_en, int lid_type, double bld, int pfilt_num);
 
@@ -172,7 +191,7 @@ public:
   std::shared_ptr<rclcpp::Publisher<sensor_msgs::msg::PointCloud2>> pub_corn;
 
 private:
-  void avia_handler(const livox_ros_driver2::msg::CustomMsg::SharedPtr &msg);
+  void livox_handler(const sensor_msgs::msg::PointCloud2::ConstSharedPtr &msg);
   void oust64_handler(const sensor_msgs::msg::PointCloud2::ConstSharedPtr &msg);
   void velodyne_handler(const sensor_msgs::msg::PointCloud2::ConstSharedPtr &msg);
   void xt32_handler(const sensor_msgs::msg::PointCloud2::ConstSharedPtr &msg);
@@ -197,4 +216,3 @@ private:
 };
 typedef std::shared_ptr<Preprocess> PreprocessPtr;
 
-#endif // PREPROCESS_H_

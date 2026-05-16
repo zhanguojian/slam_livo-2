@@ -2,8 +2,8 @@
   ros__parameters:
     common:
       img_topic: "/left_camera/image"
-      lid_topic: "/livox/lidar"
-      imu_topic: "/livox/imu"
+      lid_topic: "/ns101/livox/lidar_192_168_1_200"
+      imu_topic: "/ns101/livox/imu_192_168_1_200"
       img_en: 0
       lidar_en: 1
       ros_driver_bug_fix: false
@@ -24,11 +24,12 @@
       exposure_time_init: 0.0
 
     preprocess:
-      point_filter_num: 1
+      point_filter_num: 3 
       filter_size_surf: 0.1
       lidar_type: 1 # Livox Avia LiDAR
-      scan_line: 6
+      scan_line: 4
       blind: 0.8
+      feature_extract_enabled: true
 
     vio:
       max_iterations: 5
@@ -55,7 +56,7 @@
       dept_err: 0.02
       beam_err: 0.05
       min_eigen_value: 0.0025 # 0.005
-      voxel_size: 0.5
+      voxel_size: 0.7
       max_layer: 2
       max_points_num: 50
       layer_init_num: [5, 5, 5, 5, 5]
@@ -70,7 +71,7 @@
       gravity_align_en: false
 
     publish:
-      dense_map_en: true
+      dense_map_en: false
       pub_effect_point_en: false 
       pub_plane_en: false
       pub_scan_num: 1
@@ -84,7 +85,7 @@
       pcd_save_en: true
       type: 0 # 0: World Frame, 1: Body Frame;
       colmap_output_en: false # need to set interval = -1
-      filter_size_pcd: 0.15
+      filter_size_pcd: 0.5
       interval: -1
       # how many LiDAR frames saved in each pcd file;
       # -1 : all frames will be saved in ONE pcd file, may lead to memory crash when having too much frames.

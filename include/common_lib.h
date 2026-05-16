@@ -40,7 +40,7 @@ using namespace Sophus;
 
 enum LID_TYPE
 {
-  AVIA = 1,
+  livox = 1,
   VELO16 = 2,
   OUST64 = 3,
   L515 = 4,
