@@ -2,8 +2,8 @@
   ros__parameters:
     common:
       img_topic: "/left_camera/image"
-      lid_topic: "/ns101/livox/lidar_192_168_1_200"
-      imu_topic: "/ns101/livox/imu_192_168_1_200"
+      lid_topic: "/ns2/livox/lidar_192_188_1_2"
+      imu_topic: "/ns2/livox/imu_192_188_1_2"
       img_en: 0
       lidar_en: 1
       ros_driver_bug_fix: false

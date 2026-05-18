@@ -21,7 +21,7 @@ Preprocess::Preprocess() : feature_enabled(0), lidar_type(livox), blind(0.01), p
   N_SCANS = 4;
   group_size = 8; 
   disA = 0.01;
-  disA = 0.1; // B?
+  disB = 0.1; // B?
   p2l_ratio = 225;
   limit_maxmid = 6.25;
   limit_midmin = 6.25;
@@ -139,7 +139,7 @@ void Preprocess::livox_handler(const sensor_msgs::msg::PointCloud2::ConstSharedP
       const uint8_t line = *iter_line;
       const uint8_t tag = *iter_tag;
 
-      if ((line < N_SCANS) && ((tag & 0x30) == 0x00))
+      if (line < N_SCANS)
       {
         PointType p;
 
@@ -248,7 +248,7 @@ void Preprocess::livox_handler(const sensor_msgs::msg::PointCloud2::ConstSharedP
       const uint8_t line = *iter_line;
       const uint8_t tag = *iter_tag;
 
-      if ((line < N_SCANS) && ((tag & 0x30) == 0x00))
+      if (line < N_SCANS) 
       {
         valid_num++;
 
@@ -303,131 +303,7 @@ void Preprocess::livox_handler(const sensor_msgs::msg::PointCloud2::ConstSharedP
 
   printf("[ Preprocess ] Output point number: %zu \n", pl_surf.points.size());
 }
-// void Preprocess::livox_handler(const sensor_msgs::msg::PointCloud2::ConstSharedPtr &msg)
-// {
-//   pl_surf.clear();
-//   pl_corn.clear();
-//   pl_full.clear();
 
-//   double t1 = omp_get_wtime();
-
-//   const size_t plsize = static_cast<size_t>(msg->width * msg->height);
-//   printf("[ Preprocess ] Input point number: %d \n", plsize);
-
-//   pl_corn.reserve(plsize);
-//   pl_surf.reserve(plsize);
-//   pl_full.resize(plsize);
-
-//   for (int i = 0; i < N_SCANS; i++)
-//   {
-//     pl_buff[i].clear();
-//     pl_buff[i].reserve(plsize);
-//   }
-//   uint valid_num = 0;  
-
-//   double frame_start_ns = static_cast<double>(msg->header.stamp.sec) * 1e9 + static_cast<double>(msg->header.stamp.nanosec);
-
-
-//   if (feature_enabled)
-//   {
-
-//     sensor_msgs::PointCloud2ConstIterator<float> iter_x(*msg, "x");
-//     sensor_msgs::PointCloud2ConstIterator<float> iter_y(*msg, "y");
-//     sensor_msgs::PointCloud2ConstIterator<float> iter_z(*msg, "z");
-//     sensor_msgs::PointCloud2ConstIterator<float> iter_i(*msg, "intensity");
-//     sensor_msgs::PointCloud2ConstIterator<uint8_t> iter_tag(*msg, "tag");
-//     sensor_msgs::PointCloud2ConstIterator<uint8_t> iter_line(*msg, "line");
-//     sensor_msgs::PointCloud2ConstIterator<double> iter_t(*msg, "timestamp");
-
-//     for(uint32_t i = 0; i < plsize; ++i, ++iter_x, ++iter_y, ++iter_z, ++iter_i, ++iter_tag, ++iter_line, ++iter_t)
-//     {
-//       if ((*iter_line < N_SCANS) && ((*iter_tag & 0x30) == 0x10))
-//       {
-//         pl_full[i].x = *iter_x;
-//         pl_full[i].y = *iter_y;
-//         pl_full[i].z = *iter_z;
-//         pl_full[i].intensity = *iter_i;
-//         pl_full[i].curvature = (*iter_t - frame_start_ns) / 1e6;  // use curvature as time of each laser points
-
-//         bool is_new = false;
-//         if ((abs(pl_full[i].x - pl_full[i - 1].x) > 1e-7) || (abs(pl_full[i].y - pl_full[i - 1].y) > 1e-7) ||
-//             (abs(pl_full[i].z - pl_full[i - 1].z) > 1e-7))
-//         {
-//           pl_buff[*iter_line].push_back(pl_full[i]);
-//         }
-//       }
-//     }
-
-//     static int count = 0;
-//     static double time = 0.0;
-//     count++;
-//     double t0 = omp_get_wtime();
-//     for (int j = 0; j < N_SCANS; j++)
-//     {
-//       if (pl_buff[j].size() <= 5) continue;
-//       pcl::PointCloud<PointType> &pl = pl_buff[j];
-//       plsize = pl.size();
-//       vector<orgtype> &types = typess[j];
-//       types.clear();
-//       types.resize(plsize);
-//       plsize--;
-//       for (uint i = 0; i < plsize; i++)
-//       {
-//         types[i].range = pl[i].x * pl[i].x + pl[i].y * pl[i].y;
-//         vx = pl[i].x - pl[i + 1].x;
-//         vy = pl[i].y - pl[i + 1].y;
-//         vz = pl[i].z - pl[i + 1].z;
-//         types[i].dista = vx * vx + vy * vy + vz * vz;
-//       }
-//       types[plsize].range = pl[plsize].x * pl[plsize].x + pl[plsize].y * pl[plsize].y;
-//       give_feature(pl, types);
-//       // pl_surf += pl;
-//     }
-//     time += omp_get_wtime() - t0;
-//     printf("Feature extraction time: %lf \n", time / count);
-//   }
-//   else
-//   {
-//     sensor_msgs::PointCloud2ConstIterator<float> iter_x(*msg, "x");
-//     sensor_msgs::PointCloud2ConstIterator<float> iter_y(*msg, "y");
-//     sensor_msgs::PointCloud2ConstIterator<float> iter_z(*msg, "z");
-//     sensor_msgs::PointCloud2ConstIterator<float> iter_i(*msg, "intensity");
-//     sensor_msgs::PointCloud2ConstIterator<uint8_t> iter_tag(*msg, "tag");
-//     sensor_msgs::PointCloud2ConstIterator<uint8_t> iter_line(*msg, "line");
-//     sensor_msgs::PointCloud2ConstIterator<double> iter_t(*msg, "timestamp");
-
-//     for(uint32_t i = 0; i < plsize; ++i, ++iter_x, ++iter_y, ++iter_z, ++iter_i, ++iter_tag, ++iter_line, ++iter_t)
-//     {
-//       if ((*iter_line < N_SCANS) && ((*iter_tag & 0x30) == 0x10))
-//       {
-//         pl_full[i].x = *iter_x;
-//         pl_full[i].y = *iter_y;
-//         pl_full[i].z = *iter_z;
-//         pl_full[i].intensity = *iter_i;
-
-//         if(i == 0)
-//         {
-//           pl_full[i].curvature = fabs((*iter_t - frame_start_ns) / 1e6) < 1.0 ? (*iter_t - frame_start_ns) / 1e6 : 0.0;
-//         }
-//         else
-//         {
-//           // if(fabs((*iter_t - frame_start_ns) / 1e6 - pl_full[i - 1].curvature) > 1.0) ROS_ERROR("time jump: %f", fabs((*iter_t - frame_start_ns) / 1e6 - pl_full[i - 1].curvature));
-//           pl_full[i].curvature = fabs((*iter_t - frame_start_ns) / 1e6 - pl_full[i - 1].curvature) < 1.0
-//                                      ? (*iter_t - frame_start_ns) / 1e6
-//                                      : pl_full[i - 1].curvature + 0.004166667f; // float(100/24000)
-//         }
-
-//         if (pl_full[i].x * pl_full[i].x + pl_full[i].y * pl_full[i].y + pl_full[i].z * pl_full[i].z >= blind_sqr)
-//         {
-//           pl_surf.push_back(pl_full[i]);
-
-//         }
-//       }
-//     }
-//   }
-
-//   printf("[ Preprocess ] Output point number: %zu \n", pl_surf.points.size());
-// }
 
 void Preprocess::l515_handler(const sensor_msgs::msg::PointCloud2::ConstSharedPtr &msg)
 {
@@ -1032,52 +908,6 @@ void Preprocess::give_feature(pcl::PointCloud<PointType> &pl, vector<orgtype> &t
       i = i_nex;
       last_state = 0;
     }
-    // else if(plane_type == 0)
-    // {
-    //   if(last_state == 1)
-    //   {
-    //     uint i_nex_tem;
-    //     uint j;
-    //     for(j=last_i+1; j<=last_i_nex; j++)
-    //     {
-    //       uint i_nex_tem2 = i_nex_tem;
-    //       Eigen::Vector3d curr_direct2;
-
-    //       uint ttem = plane_judge(pl, types, j, i_nex_tem, curr_direct2);
-
-    //       if(ttem != 1)
-    //       {
-    //         i_nex_tem = i_nex_tem2;
-    //         break;
-    //       }
-    //       curr_direct = curr_direct2;
-    //     }
-
-    //     if(j == last_i+1)
-    //     {
-    //       last_state = 0;
-    //     }
-    //     else
-    //     {
-    //       for(uint k=last_i_nex; k<=i_nex_tem; k++)
-    //       {
-    //         if(k != i_nex_tem)
-    //         {
-    //           types[k].ftype = Real_Plane;
-    //         }
-    //         else
-    //         {
-    //           types[k].ftype = Poss_Plane;
-    //         }
-    //       }
-    //       i = i_nex_tem-1;
-    //       i_nex = i_nex_tem;
-    //       i2 = j-1;
-    //       last_state = 1;
-    //     }
-
-    //   }
-    // }
 
     last_i = i2;
     last_i_nex = i_nex;
