@@ -1,24 +1,26 @@
 /**:
   ros__parameters:
     common:
-      img_topic: "/left_camera/image"
-      lid_topic: "/ns1/livox/lidar_192_168_6_100"
-      imu_topic: "/ns1/livox/imu_192_168_6_100"
-      img_en: 0
+      img_topic: "/image_raw"
+      lid_topic: "/livox/lidar"
+      imu_topic: "/livox/imu"
+      img_en: 1
       lidar_en: 1
       ros_driver_bug_fix: false
       use_bag: true
-      bag_name: "kunyao"
+      bag_name: "test_4"
 
     extrin_calib:
       extrinsic_T: [0.04165, 0.02326, -0.0284]
       extrinsic_R: [1.0, 0.0, 0.0,
                     0.0, 1.0, 0.0,
                     0.0, 0.0, 1.0]
-      Rcl: [0.00610193,-0.999863,-0.0154172,
-            -0.00615449,0.0153796,-0.999863,
-            0.999962,0.00619598,-0.0060598] 
-      Pcl: [0.0194384, 0.104689,-0.0251952]
+      Rcl: [
+        0.999840, -0.011677,  0.013581,
+        0.016989,  0.378089, -0.925613,
+        0.005674,  0.925696,  0.378227
+      ]
+      Pcl: [ -0.066278,  -0.042578,  -0.018944]
 
     time_offset: 
       imu_time_offset: 0.0
@@ -26,7 +28,7 @@
       exposure_time_init: 0.0
 
     preprocess:
-      point_filter_num: 2
+      point_filter_num: 1
       filter_size_surf: 0.1
       lidar_type: 1 # Livox Avia LiDAR
       scan_line: 4
@@ -40,7 +42,7 @@
       patch_size: 8
       patch_pyrimid_level: 4
       normal_en: true
-      raycast_en: false
+      raycast_en: true
       inverse_composition_en: false
       exposure_estimate_en: true
       inv_expo_cov: 0.1
@@ -70,11 +72,11 @@
 
     uav:
       imu_rate_odom: false
-      gravity_align_en: false
+      gravity_align_en: true
 
     publish:
-      dense_map_en: false
-      pub_effect_point_en: false 
+      dense_map_en: true
+      pub_effect_point_en: true
       pub_plane_en: false
       pub_scan_num: 1
       blind_rgb_points: 0.0
@@ -85,7 +87,7 @@
 
     pcd_save:
       pcd_save_en: true
-      type: 1 # 0: World Frame, 1: Body Frame;
+      type: 0 # 0: World Frame, 1: Body Frame;
       colmap_output_en: false # need to set interval = -1
       filter_size_pcd: 0.1
       interval: -1
