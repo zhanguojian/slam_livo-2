@@ -191,6 +191,9 @@ public:
   double aver_time_map_inre = 0;
   bool colmap_output_en = false;
   bool use_bag_ = true;
+  bool use_pcap_ = false;
   std::string bag_name;
+  std::string pcap_file;
+  std::string raw_image_csv;
 };
 #endif

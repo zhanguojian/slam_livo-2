@@ -13,7 +13,6 @@ which is included as part of this source code package.
 #include "LIVMapper.h"
 #include "io_utils.h"
 #include <vikit/camera_loader.h>
-#include "io_utils.h"
 
 
 using namespace Sophus;
@@ -120,6 +119,9 @@ void LIVMapper::readParameters(rclcpp::Node::SharedPtr &node)
   this->node->declare_parameter<bool>("publish.dense_map_en", false);
   this->node->declare_parameter<bool>("common.use_bag", false);
   this->node->declare_parameter<std::string>("common.bag_name",bag_name);
+  this->node->declare_parameter<bool>("common.use_pcap", false);
+  this->node->declare_parameter<std::string>("common.pcap_file", "");
+  this->node->declare_parameter<std::string>("common.raw_image_csv", "");
 
   // get parameter
   this->node->get_parameter("common.lid_topic", lid_topic);
@@ -181,6 +183,9 @@ void LIVMapper::readParameters(rclcpp::Node::SharedPtr &node)
   this->node->get_parameter("publish.dense_map_en", dense_map_en);
   this->node->get_parameter("common.use_bag", use_bag_);
   this->node->get_parameter("common.bag_name", bag_name);
+  this->node->get_parameter("common.use_pcap", use_pcap_);
+  this->node->get_parameter("common.pcap_file", pcap_file);
+  this->node->get_parameter("common.raw_image_csv", raw_image_csv);
 
 }
 
@@ -642,6 +647,37 @@ void LIVMapper::run(rclcpp::Node::SharedPtr &node)
       stateEstimationAndMapping();
     }
     if (bag_thread.joinable()) bag_thread.join();
+    savePCD();
+    return;
+  }
+
+  if (use_pcap_) {
+    // PCAP 点云/IMU 与海康 raw 图像统一按时间戳送入现有回调。
+    std::thread pcap_thread([this]() {
+      PcapIO pcap(pcap_file, raw_image_csv);
+      if (lidar_en)
+        pcap.addPointCloud2Handle(lid_topic,
+          [this](const sensor_msgs::msg::PointCloud2::ConstSharedPtr &m) {
+            standard_pcl_cbk(m); return true; });
+      if (imu_en)
+        pcap.addIMUHandle(imu_topic,
+          [this](const sensor_msgs::msg::Imu::ConstSharedPtr &m) {
+            imu_cbk(m); return true; });
+      if (img_en)
+        pcap.addImageHandle(img_topic,
+          [this](const sensor_msgs::msg::Image::ConstSharedPtr &m) {
+            img_cbk(m); return true; });
+      pcap.go();
+    });
+
+    rclcpp::Rate rate(5000);
+    while (rclcpp::ok()) {
+      if (!sync_packages(LidarMeasures)) { rate.sleep(); continue; }
+      handleFirstFrame();
+      processImu();
+      stateEstimationAndMapping();
+    }
+    if (pcap_thread.joinable()) pcap_thread.join();
     savePCD();
     return;
   }

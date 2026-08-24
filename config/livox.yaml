@@ -9,6 +9,12 @@
       ros_driver_bug_fix: false
       use_bag: true
       bag_name: "test_4"
+      # PCAP 离线模式与 use_bag 二选一；相对路径以工程根目录为基准
+      use_pcap: false
+      pcap_file: "data/pcap/livox.pcap"
+      # CSV 与 raw 文件放在同一目录，格式：
+      # file,frame_num,width,height,pixel_format,host_time_ns
+      raw_image_csv: "data/raw/frames.csv"
 
     extrin_calib:
       extrinsic_T: [0.04165, 0.02326, -0.0284]

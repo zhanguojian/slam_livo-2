@@ -100,6 +100,10 @@ find_package(PCL REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(Boost REQUIRED COMPONENTS thread)
 find_package(fmt REQUIRED)
+find_library(PCAP_LIBRARY pcap)
+if(NOT PCAP_LIBRARY)
+  message(FATAL_ERROR "未找到 libpcap，请安装 libpcap-dev")
+endif()
 
 find_package(rosbag2_cpp REQUIRED)
 find_package(rosbag2_storage REQUIRED)
@@ -168,6 +172,7 @@ target_link_libraries(vio ${COMMON_DEPENDENCIES})
 target_link_libraries(lio utils ${COMMON_DEPENDENCIES})
 target_link_libraries(pre ${COMMON_DEPENDENCIES})
 target_link_libraries(imu_proc ${COMMON_DEPENDENCIES})
+target_link_libraries(utils ${PCAP_LIBRARY} ${OpenCV_LIBRARIES})
 
 # Add the main executable
 add_executable(fastlivo_mapping src/main.cpp)
