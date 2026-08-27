@@ -4,17 +4,27 @@
       img_topic: "/image_raw"
       lid_topic: "/livox/lidar"
       imu_topic: "/livox/imu"
-      img_en: 1
+      img_en: 0
       lidar_en: 1
       ros_driver_bug_fix: false
-      use_bag: true
+      use_bag: false 
       bag_name: "test_4"
       # PCAP 离线模式与 use_bag 二选一；相对路径以工程根目录为基准
-      use_pcap: false
-      pcap_file: "data/pcap/livox.pcap"
-      # CSV 与 raw 文件放在同一目录，格式：
-      # file,frame_num,width,height,pixel_format,host_time_ns
-      raw_image_csv: "data/raw/frames.csv"
+      use_pcap: true
+      pcap_file: "data/pcap/mid360.pcap"
+      # img_en: 0 -> PcapIO 进入 LIDAR_ONLY，从 PCAP 第一颗有效点开始 100ms 组帧
+      # img_en: 1 -> PcapIO 进入 IMAGE_SYNC，使用下面 CSV + 连续 RAW
+      #
+      # CSV 格式：
+      # frame_count,sdk_frame,width,height,frame_len,pixel_type,file_offset,host_receive_ns
+      raw_image_csv: "data/raw/frame_info.csv"
+
+      # 连续 Bayer RAW 文件；请按你真实文件名修改
+      raw_image_file: "data/raw/camera.raw"
+
+      # STM32 trigger 到 SDK 获得图像的固定延迟，单位 ns。
+      # 未标定前先设 0；后面测出固定延迟后再填。
+      camera_receive_delay_ns: 0
 
     extrin_calib:
       extrinsic_T: [0.04165, 0.02326, -0.0284]
@@ -30,8 +40,8 @@
 
     time_offset: 
       imu_time_offset: 0.0
-      img_time_offset: 0.1
-      exposure_time_init: 0.0
+      img_time_offset: 0.0
+      exposure_time_init: 0.0  
 
     preprocess:
       point_filter_num: 1

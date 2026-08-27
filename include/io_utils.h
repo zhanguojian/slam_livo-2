@@ -4,8 +4,10 @@
 
 #include <cassert>
 #include <cstdint>
+#include <fstream>
 #include <functional>
 #include <iostream>
+#include <limits>
 #include <map>
 #include <memory>
 #include <string>
@@ -64,24 +66,20 @@ protected:
 
 /**
  * ROSBAG IO
- * 指定一个包名，添加一些回调函数，就可以顺序遍历这个包
+ * 指定一个包名，添加一些回调函数，就可以顺序遍历这个包。
  */
 class RosbagIO : public DataIO {
 public:
-    // 传入 rosbag2 的目录路径（包含 metadata.yaml 的文件夹），或完整 uri
     explicit RosbagIO(std::string bag_filename)
         : DataIO(bag_filename)
     {
         assert(bag_filename != "");
-        // rosbag2 录制的是“目录”，open 时传目录即可
         bag_path_ = std::string(ROOT_DIR) + "data/bag/" + bag_filename;
     }
 
-    // 通用回调
     using MessageProcessFunction =
         std::function<bool(const rosbag2_storage::SerializedBagMessageSharedPtr m)>;
 
-    // 运行主函数
     void go() override;
 
     void printfBagMetaInfo()
@@ -100,14 +98,13 @@ public:
         std::cout << "--------------------------------" << std::endl;
     }
 
-    // 通用处理函数
-    RosbagIO &AddHandle(const std::string &topic_name, MessageProcessFunction handle)
+    RosbagIO &AddHandle(const std::string &topic_name,
+                        MessageProcessFunction handle)
     {
         process_func_.emplace(topic_name, std::move(handle));
         return *this;
     }
 
-    // 点云 handle
     RosbagIO &AddPointCloudHandle(const std::string &topic_name,
                                   PointCloud2Handle f)
     {
@@ -126,7 +123,6 @@ public:
         return AddPointCloudHandle(topic_name, std::move(f));
     }
 
-    // imu handle
     RosbagIO &AddImuHandle(const std::string &topic_name, ImuHandle f)
     {
         return AddHandle(topic_name,
@@ -143,7 +139,6 @@ public:
         return AddImuHandle(topic_name, std::move(f));
     }
 
-    // image handle
     RosbagIO &AddImageHandle(const std::string &topic_name, ImageHandle f)
     {
         return AddHandle(topic_name,
@@ -177,44 +172,107 @@ private:
     uint64_t total_message_count_ = 0llu;
     uint64_t read_message_count_ = 0llu;
 };
+
 /**
- * 海康相机 raw 图像读取器。
- * CSV 格式：file,frame_num,width,height,pixel_format,host_time_ns
+ * 海康相机连续 RAW 文件读取器。
+ *
+ * CSV 固定格式：
+ * frame_count,sdk_frame,width,height,frame_len,pixel_type,file_offset,host_receive_ns
+ *
+ * 一个 .raw 文件中连续保存所有帧，通过 file_offset + frame_len 读取指定帧。
+ * host_receive_ns 只用于和 PCAP Epoch Time 建立 anchor；
+ * 最终 sensor_msgs/Image.header.stamp 使用 LiDAR 同步时间。
  */
 class RawImageIO {
 public:
-    explicit RawImageIO(const std::string &csv_path);
+    RawImageIO(const std::string &csv_path,
+               const std::string &raw_path);
+    ~RawImageIO();
 
     bool valid() const { return valid_; }
+
     RawImageIO &addImageHandle(ImageHandle f);
-    void emitUntil(uint64_t timestamp_ns);
-    void emitRemaining();
+
+    uint64_t firstHostTimeNs() const;
+    uint64_t firstSdkFrame() const;
+    uint64_t lastSdkFrame() const;
+    size_t frameCount() const { return frames_.size(); }
+
+    /**
+     * lidar_frame_index=0 对应 CSV 中第一张 sdk_frame。
+     * 若 sdk_frame 中间跳号，则对应图像会被判定为丢失，后续不会整体错位。
+     */
+    bool emitFrameForLidarIndex(uint64_t lidar_frame_index,
+                                uint64_t lidar_timestamp_ns);
 
 private:
     struct FrameMeta {
-        std::string file;
-        uint64_t frame_num = 0;
+        uint64_t frame_count = 0;
+        uint64_t sdk_frame = 0;
         uint32_t width = 0;
         uint32_t height = 0;
-        std::string pixel_format;
+        uint32_t frame_len = 0;
+        uint32_t pixel_type = 0;
+        uint64_t file_offset = 0;
         uint64_t host_time_ns = 0;
     };
 
     bool loadMetadata();
-    ImageMsgPtr readFrame(const FrameMeta &meta) const;
+    bool validateRawFile();
+
+    const FrameMeta *findBySdkFrame(uint64_t sdk_frame) const;
+    ImageMsgPtr readFrame(const FrameMeta &meta,
+                          uint64_t lidar_timestamp_ns);
 
     std::string csv_path_;
-    std::string raw_dir_;
+    std::string raw_path_;
+    std::ifstream raw_stream_;
+
     std::vector<FrameMeta> frames_;
-    size_t next_frame_index_ = 0;
     bool valid_ = false;
     ImageHandle image_handle_;
 };
 
+/**
+ * PCAP 点云组帧模式：
+ *
+ * LIDAR_ONLY:
+ *   不使用图像。从 PCAP 中第一颗有效 LiDAR 点开始，每 100 ms 组一帧。
+ *
+ * IMAGE_SYNC:
+ *   使用第一张图像的 host_receive_ns 和 PCAP Epoch Time 匹配最近的点云 UDP；
+ *   取该 UDP 内部的 LiDAR timestamp 作为 frame_anchor_ns_；
+ *   从该 anchor 开始每 100 ms 组一帧，并给对应图像赋相同 LiDAR 时间戳。
+ */
+enum class PcapFrameMode {
+    LIDAR_ONLY = 0,
+    IMAGE_SYNC = 1
+};
+
 class PcapIO : public DataIO {
 public:
+    /**
+     * 单 LiDAR：
+     *   PcapIO("data/mid360.pcap");
+     *
+     * LiDAR + Camera：
+     *   PcapIO("data/mid360.pcap",
+     *          "data/frames.csv",
+     *          "data/camera.raw");
+     */
     explicit PcapIO(const std::string &filename,
-                    const std::string &raw_image_csv = "");
+                    const std::string &raw_image_csv = "",
+                    const std::string &raw_image_file = "");
+
+    /**
+     * 若已知从 STM32 触发到 MVS SDK 得到一帧的固定延迟，可设置为正数。
+     * anchor 搜索时使用：target_host = first_host_receive - delay。
+     * 默认 0，表示直接使用 host_receive_ns 对齐 PCAP Epoch。
+     */
+    PcapIO &setCameraReceiveDelayNs(int64_t delay_ns);
+
+    PcapFrameMode frameMode() const { return frame_mode_; }
+    uint64_t frameAnchorNs() const { return frame_anchor_ns_; }
 
     int32_t checkPacket(const pcap_pkthdr *header, const uint8_t *data);
     PacketType parsePacket(const pcap_pkthdr *header, const uint8_t *data);
@@ -228,15 +286,44 @@ public:
                            ImageHandle f) override;
 
 private:
+    static constexpr uint64_t FRAME_PERIOD_NS = 100000000ULL;  // 10 Hz
+    static constexpr uint64_t INVALID_FRAME_INDEX =
+        std::numeric_limits<uint64_t>::max();
+
     void initializePointCloudMessage();
-    void finalizePointCloudMessage();
+    void finalizePointCloudMessage(uint64_t frame_stamp_ns);
+    void resetRuntimeState();
+    void publishCompletedFrame();
+    void flushLastFrame();
+
+    bool findImageSyncAnchor();
+
+    PcapFrameMode frame_mode_ = PcapFrameMode::LIDAR_ONLY;
+    int64_t camera_receive_delay_ns_ = 0;
+
+    // 帧时间基准。
+    bool frame_anchor_ready_ = false;
+    uint64_t frame_anchor_ns_ = 0;
+    uint64_t anchor_pcap_host_ns_ = 0;
+
+    // 当前正在累积的 LiDAR 帧。
+    uint64_t current_frame_index_ = INVALID_FRAME_INDEX;
+    uint64_t current_frame_start_ns_ = 0;
+
+    // parsePacket() 刚刚完成的上一帧。
+    bool completed_frame_pending_ = false;
+    uint64_t completed_frame_index_ = INVALID_FRAME_INDEX;
+    uint64_t completed_frame_stamp_ns_ = 0;
 
     uint16_t last_imu_cnt_ = 0;
     ImuMsgPtr imu_msg_;
+
     uint16_t last_lidar_cnt_ = 0;
     uint64_t last_packet_timestamp_ns_ = 0;
+
     std::vector<PointCloudXYZIRT> frame_points_;
     PointCloud2MsgPtr lidar_msg_;
+
     PointCloud2Handle point_cloud_handle_;
     ImuHandle imu_handle_;
     std::unique_ptr<RawImageIO> raw_image_io_;

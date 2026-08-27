@@ -12,6 +12,7 @@ which is included as part of this source code package.
 
 #include "LIVMapper.h"
 #include "io_utils.h"
+#include <atomic>
 #include <vikit/camera_loader.h>
 
 
@@ -122,6 +123,9 @@ void LIVMapper::readParameters(rclcpp::Node::SharedPtr &node)
   this->node->declare_parameter<bool>("common.use_pcap", false);
   this->node->declare_parameter<std::string>("common.pcap_file", "");
   this->node->declare_parameter<std::string>("common.raw_image_csv", "");
+  this->node->declare_parameter<std::string>("common.raw_image_file", "");
+  // 相机真正触发到 SDK 得到该帧之间的固定延迟。未知时保持 0。
+  this->node->declare_parameter<int64_t>("common.camera_receive_delay_ns", 0);
 
   // get parameter
   this->node->get_parameter("common.lid_topic", lid_topic);
@@ -619,86 +623,251 @@ void LIVMapper::savePCD()
   }
 }
 
-void LIVMapper::run(rclcpp::Node::SharedPtr &node) 
+void LIVMapper::run(rclcpp::Node::SharedPtr &node)
 {
-  if (use_bag_) {
-    // 离线模式：用单独线程顺序读 bag，把消息喂给已有回调
-    std::thread bag_thread([this]() {
+  // =========================================================================
+  // 1. ROSBAG 离线模式
+  // =========================================================================
+  if (use_bag_)
+  {
+    std::atomic<bool> bag_finished{false};
+
+    std::thread bag_thread([this, &bag_finished]() {
       RosbagIO bag(bag_name);
+
       if (lidar_en)
-        bag.AddPointCloudHandle(lid_topic,
+      {
+        bag.AddPointCloudHandle(
+          lid_topic,
           [this](const sensor_msgs::msg::PointCloud2::ConstSharedPtr &m) {
-            standard_pcl_cbk(m); return true; });
+            standard_pcl_cbk(m);
+            return true;
+          });
+      }
+
       if (imu_en)
-        bag.AddImuHandle(imu_topic,
+      {
+        bag.AddImuHandle(
+          imu_topic,
           [this](const sensor_msgs::msg::Imu::ConstSharedPtr &m) {
-            imu_cbk(m); return true; });
+            imu_cbk(m);
+            return true;
+          });
+      }
+
       if (img_en)
-        bag.AddImageHandle(img_topic,
+      {
+        bag.AddImageHandle(
+          img_topic,
           [this](const sensor_msgs::msg::Image::ConstSharedPtr &m) {
-            img_cbk(m); return true; });
+            img_cbk(m);
+            return true;
+          });
+      }
+
       bag.go();
+      bag_finished.store(true, std::memory_order_release);
+      sig_buffer.notify_all();
     });
+
     rclcpp::Rate rate(5000);
-    while (rclcpp::ok()) {
-      if (!sync_packages(LidarMeasures)) { rate.sleep(); continue; }
+
+    while (rclcpp::ok())
+    {
+      if (!sync_packages(LidarMeasures))
+      {
+        // producer 已经读完，并且当前缓冲区再也凑不出一组数据，则退出。
+        if (bag_finished.load(std::memory_order_acquire))
+        {
+          break;
+        }
+
+        rate.sleep();
+        continue;
+      }
+
       handleFirstFrame();
       processImu();
       stateEstimationAndMapping();
     }
-    if (bag_thread.joinable()) bag_thread.join();
+
+    if (bag_thread.joinable())
+    {
+      bag_thread.join();
+    }
+
     savePCD();
     return;
   }
 
-  if (use_pcap_) {
-    // PCAP 点云/IMU 与海康 raw 图像统一按时间戳送入现有回调。
-    std::thread pcap_thread([this]() {
-      PcapIO pcap(pcap_file, raw_image_csv);
-      if (lidar_en)
-        pcap.addPointCloud2Handle(lid_topic,
-          [this](const sensor_msgs::msg::PointCloud2::ConstSharedPtr &m) {
-            standard_pcl_cbk(m); return true; });
-      if (imu_en)
-        pcap.addIMUHandle(imu_topic,
-          [this](const sensor_msgs::msg::Imu::ConstSharedPtr &m) {
-            imu_cbk(m); return true; });
-      if (img_en)
-        pcap.addImageHandle(img_topic,
-          [this](const sensor_msgs::msg::Image::ConstSharedPtr &m) {
-            img_cbk(m); return true; });
-      pcap.go();
-    });
+  // =========================================================================
+  // 2. PCAP 离线模式
+  //
+  // img_en == 0:
+  //   只使用 LiDAR/IMU。
+  //   PcapIO 从第一颗有效 LiDAR 点开始，每 100ms 组一帧。
+  //
+  // img_en != 0:
+  //   使用 frames.csv + 连续 .raw。
+  //   第一遍 PCAP 用 camera host_receive_ns 匹配 PCAP Epoch Time，
+  //   得到 LiDAR anchor；第二遍从 anchor 开始严格按 100ms 点级组帧，
+  //   并给对应图像赋相同的 LiDAR 时间戳。
+  // =========================================================================
+  if (use_pcap_)
+  {
+    std::string raw_image_file;
+    int64_t camera_receive_delay_ns = 0;
+
+    this->node->get_parameter("common.raw_image_file", raw_image_file);
+    this->node->get_parameter("common.camera_receive_delay_ns",
+                              camera_receive_delay_ns);
+
+    if (img_en)
+    {
+      if (raw_image_csv.empty() || raw_image_file.empty())
+      {
+        RCLCPP_ERROR(
+          this->node->get_logger(),
+          "PCAP LIVO 模式要求同时配置 common.raw_image_csv 和 "
+          "common.raw_image_file");
+        return;
+      }
+
+      if (std::fabs(img_time_offset) > 1e-9)
+      {
+        RCLCPP_WARN(
+          this->node->get_logger(),
+          "当前是 PCAP 图像同步模式，但 time_offset.img_time_offset=%.9f。"
+          "PcapIO 已经给图像赋 LiDAR 同步时间，通常这里应该设为 0.0，"
+          "否则图像会再次被平移。",
+          img_time_offset);
+      }
+    }
+
+    std::atomic<bool> pcap_finished{false};
+
+    std::thread pcap_thread(
+      [this,
+       &pcap_finished,
+       raw_image_file,
+       camera_receive_delay_ns]() {
+
+        std::unique_ptr<PcapIO> pcap;
+
+        if (img_en)
+        {
+          // 模式2：LiDAR + Camera
+          pcap = std::make_unique<PcapIO>(
+            pcap_file,
+            raw_image_csv,
+            raw_image_file);
+
+          if (pcap->frameMode() != PcapFrameMode::IMAGE_SYNC)
+          {
+            RCLCPP_ERROR(
+              this->node->get_logger(),
+              "图像 CSV/RAW 初始化失败，无法进入 LIVO。"
+              "请检查 common.raw_image_csv / common.raw_image_file，"
+              "并确认已重新编译后再运行。");
+            pcap_finished.store(true, std::memory_order_release);
+            sig_buffer.notify_all();
+            return;
+          }
+
+          pcap->setCameraReceiveDelayNs(camera_receive_delay_ns);
+        }
+        else
+        {
+          // 模式1：单 LiDAR / LiDAR+IMU，不使用图像做 anchor
+          pcap = std::make_unique<PcapIO>(pcap_file);
+        }
+
+        if (lidar_en)
+        {
+          pcap->addPointCloud2Handle(
+            lid_topic,
+            [this](const sensor_msgs::msg::PointCloud2::ConstSharedPtr &m) {
+              standard_pcl_cbk(m);
+              return true;
+            });
+        }
+
+        if (imu_en)
+        {
+          pcap->addIMUHandle(
+            imu_topic,
+            [this](const sensor_msgs::msg::Imu::ConstSharedPtr &m) {
+              imu_cbk(m);
+              return true;
+            });
+        }
+
+        if (img_en)
+        {
+          pcap->addImageHandle(
+            img_topic,
+            [this](const sensor_msgs::msg::Image::ConstSharedPtr &m) {
+              img_cbk(m);
+              return true;
+            });
+        }
+
+        pcap->go();
+
+        pcap_finished.store(true, std::memory_order_release);
+        sig_buffer.notify_all();
+      });
 
     rclcpp::Rate rate(5000);
-    while (rclcpp::ok()) {
-      if (!sync_packages(LidarMeasures)) { rate.sleep(); continue; }
+
+    while (rclcpp::ok())
+    {
+      if (!sync_packages(LidarMeasures))
+      {
+        // PCAP 已经读完，而且此时无法再拼出完整测量组，结束离线处理。
+        if (pcap_finished.load(std::memory_order_acquire))
+        {
+          break;
+        }
+
+        rate.sleep();
+        continue;
+      }
+
       handleFirstFrame();
       processImu();
       stateEstimationAndMapping();
     }
-    if (pcap_thread.joinable()) pcap_thread.join();
+
+    if (pcap_thread.joinable())
+    {
+      pcap_thread.join();
+    }
+
     savePCD();
     return;
   }
 
+  // =========================================================================
+  // 3. 正常 ROS2 在线模式
+  // =========================================================================
   rclcpp::Rate rate(5000);
-  while (rclcpp::ok()) 
+
+  while (rclcpp::ok())
   {
     rclcpp::spin_some(this->node);
-    if (!sync_packages(LidarMeasures)) 
+
+    if (!sync_packages(LidarMeasures))
     {
       rate.sleep();
       continue;
     }
+
     handleFirstFrame();
-
     processImu();
-
-    // if (!p_imu->imu_time_init) continue;
-
     stateEstimationAndMapping();
   }
+
   savePCD();
 }
 
@@ -927,18 +1096,29 @@ void LIVMapper::imu_cbk(const sensor_msgs::msg::Imu::ConstSharedPtr &msg_in)
 {
   if (!imu_en) return;
 
-  if (last_timestamp_lidar < 0.0) return;
+  // 在线模式维持原行为：LiDAR 未开始前不接 IMU。
+  // PCAP 模式中 PcapIO 已经在 anchor 前过滤数据，因此允许先把 anchor 后的
+  // IMU 放入缓冲，避免第一帧 LiDAR 完成前约 100ms 的 IMU 被全部丢掉。
+  if (last_timestamp_lidar < 0.0 && !use_pcap_) return;
+
   RCLCPP_INFO(this->node->get_logger(), "get imu at time: %.6f", stamp2Sec(msg_in->header.stamp));
   sensor_msgs::msg::Imu::SharedPtr msg(new sensor_msgs::msg::Imu(*msg_in));
   msg->header.stamp = sec2Stamp(stamp2Sec(msg->header.stamp) - imu_time_offset);
   double timestamp = stamp2Sec(msg->header.stamp);
 
-  if (fabs(last_timestamp_lidar - timestamp) > 0.5 && (!ros_driver_fix_en))
+  if (last_timestamp_lidar >= 0.0 &&
+      fabs(last_timestamp_lidar - timestamp) > 0.5 &&
+      (!ros_driver_fix_en))
   {
-    RCLCPP_WARN(this->node->get_logger(), "IMU and LiDAR not synced! delta time: %lf .\n", last_timestamp_lidar - timestamp);
+    RCLCPP_WARN(this->node->get_logger(),
+                "IMU and LiDAR not synced! delta time: %lf .\n",
+                last_timestamp_lidar - timestamp);
   }
 
-  if (ros_driver_fix_en) timestamp += std::round(last_timestamp_lidar - timestamp);
+  if (ros_driver_fix_en && last_timestamp_lidar >= 0.0)
+  {
+    timestamp += std::round(last_timestamp_lidar - timestamp);
+  }
   msg->header.stamp = sec2Stamp(timestamp);
 
   mtx_buffer.lock();
@@ -977,9 +1157,9 @@ void LIVMapper::imu_cbk(const sensor_msgs::msg::Imu::ConstSharedPtr &msg_in)
 
 cv::Mat LIVMapper::getImageFromMsg(const sensor_msgs::msg::Image::ConstSharedPtr &img_msg)
 {
-  cv::Mat img;
-  img = cv_bridge::toCvShare(img_msg, "bgr8")->image;
-  return img;
+  // toCvShare 在编码已是 bgr8 时不拷贝像素，只是指向 ROS 消息内存。
+  // img_cbk 返回后消息析构，Mat 会变成悬空，VIO 读到全黑/花屏。
+  return cv_bridge::toCvCopy(img_msg, "bgr8")->image;
 }
 
 // static int i = 0;
@@ -1004,7 +1184,9 @@ void LIVMapper::img_cbk(const sensor_msgs::msg::Image::ConstSharedPtr &msg_in)
   double msg_header_time = stamp2Sec(msg->header.stamp) + img_time_offset;
   if (abs(msg_header_time - last_timestamp_img) < 0.001) return;
   RCLCPP_INFO(this->node->get_logger(), "Get image, its header time: %.6f", msg_header_time);
-  if (last_timestamp_lidar < 0) return;
+  // 在线模式：LiDAR 未开始前不接图像。
+  // PCAP 模式中图像与点云由 PcapIO 按帧成对给出，允许先入缓冲。
+  if (last_timestamp_lidar < 0.0 && !use_pcap_) return;
 
   if (msg_header_time < last_timestamp_img)
   {
@@ -1111,7 +1293,18 @@ bool LIVMapper::sync_packages(LidarMeasureGroup &meas)
       /*** has img topic, but img topic timestamp larger than lidar end time,
        * process lidar topic. After LIO update, the meas.lidar_frame_end_time
        * will be refresh. ***/
-      if (meas.last_lio_update_time < 0.0) meas.last_lio_update_time = lid_header_time_buffer.front();
+      if (meas.last_lio_update_time < 0.0)
+      {
+        meas.last_lio_update_time = lid_header_time_buffer.front();
+        // PCAP IMAGE_SYNC 把图像时间设成与 LiDAR 帧起点相同。
+        // 若不把 last_lio_update_time 略微提前，第一帧会被当成过期图像丢掉，
+        // 之后 IMU 会一直堆积、LIVO 无法启动。
+        if (use_pcap_ &&
+            std::fabs(img_capture_time - meas.last_lio_update_time) < 1e-4)
+        {
+          meas.last_lio_update_time -= 0.001;
+        }
+      }
       // printf("[ Data Cut ] wait \n");
       // printf("[ Data Cut ] last_lio_update_time: %lf \n",
       // meas.last_lio_update_time);
