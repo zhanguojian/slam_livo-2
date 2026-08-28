@@ -6,6 +6,7 @@
 #include <limits>  // for std::numeric_limits
 #include <stdexcept> // for std::out_of_range
 
+//把一个 std::vector<int64_t> 安全地转换成 std::vector<int>，转换前检查每个数是否超出 int 的表示范围，避免直接强制转换造成数据截断或溢出。
 std::vector<int> convertToIntVectorSafe(const std::vector<int64_t>& int64_vector) {
     std::vector<int> int_vector;
     int_vector.reserve(int64_vector.size()); // 预留空间以提高效率

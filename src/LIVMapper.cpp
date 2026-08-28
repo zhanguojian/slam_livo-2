@@ -13,7 +13,6 @@ which is included as part of this source code package.
 #include "LIVMapper.h"
 #include "io_utils.h"
 #include <vikit/camera_loader.h>
-#include "io_utils.h"
 
 
 using namespace Sophus;
@@ -256,9 +255,9 @@ void LIVMapper::initializeFiles()
           return;
       }
   }
-  if(colmap_output_en) fout_points.open(std::string(ROOT_DIR) + "Log/Colmap/sparse/0/points3D.txt", std::ios::out);
-  if(pcd_save_en) fout_lidar_pos.open(std::string(ROOT_DIR) + "Log/pcd/lidar_poses.txt", std::ios::out);
-  if(img_save_en) fout_visual_pos.open(std::string(ROOT_DIR) + "Log/image/image_poses.txt", std::ios::out);
+  if(colmap_output_en) fout_points.open(std::string(ROOT_DIR) + "map/Colmap/sparse/0/points3D.txt", std::ios::out);
+  if(pcd_save_en) fout_lidar_pos.open(std::string(ROOT_DIR) + "map/pcd/lidar_poses.txt", std::ios::out);
+  if(img_save_en) fout_visual_pos.open(std::string(ROOT_DIR) + "map/image/image_poses.txt", std::ios::out);
   fout_pre.open(DEBUG_FILE_DIR("mat_pre.txt"), std::ios::out);
   fout_out.open(DEBUG_FILE_DIR("mat_out.txt"), std::ios::out);
 }
@@ -297,7 +296,7 @@ void LIVMapper::handleFirstFrame()
     _first_lidar_time = LidarMeasures.last_lio_update_time;
     p_imu->first_lidar_time = _first_lidar_time; // Only for IMU data log
     is_first_frame = true;
-    cout << "FIRST LIDAR FRAME!" << endl;
+    std::cout << "FIRST LIDAR FRAME!" << std::endl;
   }
 }
 
@@ -361,7 +360,7 @@ void LIVMapper::handleVIO()
     
   if (pcl_w_wait_pub->empty() || (pcl_w_wait_pub == nullptr)) 
   {
-    std::cout << "[ VIO ] No point!!!" << std::endl;
+    std::cerr << "[ VIO ] No point!!!" << std::endl;
     return;
   }
     
@@ -409,6 +408,7 @@ void LIVMapper::handleVIO()
 
 void LIVMapper::handleLIO() 
 {    
+  //将当前的状态矩阵转换为欧拉角，roll pitch yaw,分别是相对首帧雷达时间，欧拉角（57.3转角度），位置，速度，零偏和曝光
   euler_cur = RotMtoEuler(_state.rot_end);
   fout_pre << setw(20) << LidarMeasures.last_lio_update_time - _first_lidar_time << " " << euler_cur.transpose() * 57.3 << " "
            << _state.pos_end.transpose() << " " << _state.vel_end.transpose() << " " << _state.bias_g.transpose() << " "
@@ -416,22 +416,25 @@ void LIVMapper::handleLIO()
            
   if (feats_undistort->empty() || (feats_undistort == nullptr)) 
   {
-    std::cout << "[ LIO ]: No point!!!" << std::endl;
+    std::cerr << "[ LIO ]: No point!!!" << std::endl;
     return;
   }
 
   double t0 = omp_get_wtime();
 
+  //去畸变点云第一次下采样
   downSizeFilterSurf.setInputCloud(feats_undistort);
   downSizeFilterSurf.filter(*feats_down_body);
-  
+
   double t_down = omp_get_wtime();
 
   feats_down_size = feats_down_body->points.size();
-  voxelmap_manager->feats_down_body_ = feats_down_body;
+
   transformLidar(_state.rot_end, _state.pos_end, feats_down_body, feats_down_world);
-  voxelmap_manager->feats_down_world_ = feats_down_world;
+
   voxelmap_manager->feats_down_size_ = feats_down_size;
+  voxelmap_manager->feats_down_body_ = feats_down_body;
+  voxelmap_manager->feats_down_world_ = feats_down_world;
   
   if (!lidar_map_inited) 
   {
@@ -441,8 +444,13 @@ void LIVMapper::handleLIO()
 
   double t1 = omp_get_wtime();
 
+  //用 LiDAR 地图约束修正 IMU 预测状态；
   voxelmap_manager->StateEstimation(state_propagat);
+
+  //取回修正后的位姿和协方差；
   _state = voxelmap_manager->state_;
+
+  //取回状态估计过程中处理的带不确定性点云。
   _pv_list = voxelmap_manager->pv_list_;
 
   double t2 = omp_get_wtime();
@@ -455,48 +463,71 @@ void LIVMapper::handleLIO()
     state_update_flg = true;
   }
 
+  //是否开启轨迹保存
   if (pose_output_en) 
   {
     static bool pos_opend = false;
     static int ocount = 0;
-    std::ofstream outFile, evoFile;
+
+    //创建文件流操作
+    std::ofstream evoFile;
     if (!pos_opend) 
     {
-      evoFile.open(std::string(ROOT_DIR) + "Log/result/" + seq_name + ".txt", std::ios::out);
+      evoFile.open(std::string(ROOT_DIR) + "map/result/" + seq_name + ".txt", std::ios::out);
       pos_opend = true;
       if (!evoFile.is_open()) RCLCPP_ERROR(this->node->get_logger(), "open fail\n");
     } 
     else 
     {
-      evoFile.open(std::string(ROOT_DIR) + "Log/result/" + seq_name + ".txt", std::ios::app);
+      evoFile.open(std::string(ROOT_DIR) + "map/result/" + seq_name + ".txt", std::ios::app);
       if (!evoFile.is_open()) RCLCPP_ERROR(this->node->get_logger(), "open fail\n");
     }
+
+
     Eigen::Matrix4d outT;
     Eigen::Quaterniond q(_state.rot_end);
+
     evoFile << std::fixed;
     evoFile << LidarMeasures.last_lio_update_time << " " << _state.pos_end[0] << " " << _state.pos_end[1] << " " << _state.pos_end[2] << " "
             << q.x() << " " << q.y() << " " << q.z() << " " << q.w() << std::endl;
   }
   
+
+  //将旋转矩阵转为欧拉角再转成ros四元数发布里程计
   euler_cur = RotMtoEuler(_state.rot_end);
   geoQuat = tf::createQuaternionMsgFromRollPitchYaw(euler_cur(0), euler_cur(1), euler_cur(2));
   publish_odometry(pubOdomAftMapped);
 
   double t3 = omp_get_wtime();
 
+
+
+  //创建一块新的点云存储空间，然后使用当前优化后的位姿，将当前帧降采样点云从 LiDAR/机体坐标系转换到世界坐标系
   PointCloudXYZI::Ptr world_lidar(new PointCloudXYZI());
   transformLidar(_state.rot_end, _state.pos_end, feats_down_body, world_lidar);
+
+
+  //为当前帧的每一个点保存世界坐标，并计算该点在世界坐标系中的位置协方差，之后用“点的位置 + 点的不确定性”更新体素地图
   for (size_t i = 0; i < world_lidar->points.size(); i++) 
   {
+    //保存点的世界坐标
     voxelmap_manager->pv_list_[i].point_w << world_lidar->points[i].x, world_lidar->points[i].y, world_lidar->points[i].z;
+    //读取点的反对称矩阵
     M3D point_crossmat = voxelmap_manager->cross_mat_list_[i];
+    //读取点本身的测量协方差
     M3D var = voxelmap_manager->body_cov_list_[i];
+    //将点的测量协方差旋转到世界坐标系
     var = (_state.rot_end * extR) * var * (_state.rot_end * extR).transpose() +
           (-point_crossmat) * _state.cov.block<3, 3>(0, 0) * (-point_crossmat).transpose() + _state.cov.block<3, 3>(3, 3);
+    //世界点方差
     voxelmap_manager->pv_list_[i].var = var;
   }
+
+
   voxelmap_manager->UpdateVoxelMap(voxelmap_manager->pv_list_);
   std::cout << "[ LIO ] Update Voxel Map" << std::endl;
+
+  //将地图更新中的pv_list_赋值一份给LIVMapper
   _pv_list = voxelmap_manager->pv_list_;
   
   double t4 = omp_get_wtime();
@@ -508,15 +539,22 @@ void LIVMapper::handleLIO()
   
   PointCloudXYZI::Ptr laserCloudFullRes(dense_map_en ? feats_undistort : feats_down_body);
   int size = laserCloudFullRes->points.size();
+
+  //创建出一个相同大小的点云容器
   PointCloudXYZI::Ptr laserCloudWorld(new PointCloudXYZI(size, 1));
 
   for (int i = 0; i < size; i++) 
   {
+    //这个函数将一个 LiDAR 坐标系下的点转换到世界坐标系，并将点的强度、曲率和法向量字段复制到输出点。
     RGBpointBodyToWorld(&laserCloudFullRes->points[i], &laserCloudWorld->points[i]);
   }
+  
   *pcl_w_wait_pub = *laserCloudWorld;
 
+
+  //这里发布点云且如果inverval大于0选择保存每帧，在LIVO的VIO阶段，它把累积的世界点投影到当前图像上取色，发布彩色点云，兼顾PCD、图像和轨迹保存
   publish_frame_world(pubLaserCloudFullRes, vio_manager);
+
   if (pub_effect_point_en) publish_effect_world(pubLaserCloudEffect, voxelmap_manager->ptpl_list_);
   if (voxelmap_manager->config_setting_.is_pub_plane_map_) voxelmap_manager->pubVoxelMap();
   publish_path(pubPath);
@@ -559,13 +597,13 @@ void LIVMapper::savePCD()
 {
   if (pcd_save_en && (pcl_wait_save->points.size() > 0 || pcl_wait_save_intensity->points.size() > 0) && pcd_save_interval < 0) 
   {
-    std::string raw_points_dir = std::string(ROOT_DIR) + "map/all_raw_points.pcd";
-    std::string downsampled_points_dir = std::string(ROOT_DIR) + "map/all_downsampled_points.pcd";
+    std::string raw_points_dir = std::string(ROOT_DIR) + "map/pcd/all_raw_points.pcd";
+    std::string downsampled_points_dir = std::string(ROOT_DIR) + "map/pcd/all_downsampled_points.pcd";
     pcl::PCDWriter pcd_writer;
 
-    if (img_en)
-    {
+    if (img_en){
       pcl::PointCloud<pcl::PointXYZRGB>::Ptr downsampled_cloud(new pcl::PointCloud<pcl::PointXYZRGB>);
+
       pcl::VoxelGrid<pcl::PointXYZRGB> voxel_filter;
       voxel_filter.setInputCloud(pcl_wait_save);
       voxel_filter.setLeafSize(filter_size_pcd, filter_size_pcd, filter_size_pcd);
@@ -595,21 +633,17 @@ void LIVMapper::savePCD()
                         << 0 << std::endl;
         }
       }
-    }
-    else
-    {      
+    }else{      
       pcl::PointCloud<pcl::PointXYZINormal>::Ptr downsampled_cloud(new pcl::PointCloud<pcl::PointXYZINormal>);
       pcl::VoxelGrid<pcl::PointXYZINormal> voxel_filter;
       voxel_filter.setInputCloud(pcl_wait_save_intensity);
       voxel_filter.setLeafSize(filter_size_pcd, filter_size_pcd, filter_size_pcd);
       voxel_filter.filter(*downsampled_cloud);
 
-
       pcd_writer.writeBinary(downsampled_points_dir, *downsampled_cloud); // Save the downsampled point cloud data
 
       std::cout << GREEN << "Downsampled point cloud data saved to: " << downsampled_points_dir 
                 << " with point count after filtering: " << downsampled_cloud->points.size() << RESET << std::endl;
-
     }
   }
 }
@@ -1363,7 +1397,7 @@ void LIVMapper::publish_frame_world(const rclcpp::Publisher<sensor_msgs::msg::Po
     }
     if ((pcl_wait_save->size() > 0 || pcl_wait_save_intensity->size() > 0) && pcd_save_interval > 0 && scan_wait_num >= pcd_save_interval)
     {
-      string all_points_dir(string(string(ROOT_DIR) + "Log/pcd/") + ss_time.str() + string(".pcd"));
+      string all_points_dir(string(string(ROOT_DIR) + "map/frame/") + ss_time.str() + string(".pcd"));
 
       pcl::PCDWriter pcd_writer;
 
@@ -1396,7 +1430,7 @@ void LIVMapper::publish_frame_world(const rclcpp::Publisher<sensor_msgs::msg::Po
 
     if (img_save_interval > 0 && img_wait_num >= img_save_interval)
     {
-      imwrite(string(string(ROOT_DIR) + "Log/image/") + ss_time.str() + string(".png"), vio_manager->img_rgb);
+      imwrite(string(string(ROOT_DIR) + "map/image/") + ss_time.str() + string(".png"), vio_manager->img_rgb);
       
       Eigen::Quaterniond q(_state.rot_end);
       fout_visual_pos << std::fixed << std::setprecision(6);

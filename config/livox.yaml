@@ -81,9 +81,10 @@
       pub_scan_num: 1
       blind_rgb_points: 0.0
 
+    # 轨迹工具
     evo:
       seq_name: "CBD_Building_01"
-      pose_output_en: false
+      pose_output_en: true
 
     pcd_save:
       pcd_save_en: true
